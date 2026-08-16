@@ -72,6 +72,7 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
       generationConfig: {
         responseMimeType: "application/json",
         responseJsonSchema: responseSchema,
+        maxOutputTokens: 2400,
       },
     }),
   });
