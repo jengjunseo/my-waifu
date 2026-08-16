@@ -9,8 +9,8 @@ const lengthGuide: Record<PersistedSettings["responseLength"], string> = {
 
 /**
  * Keep a stable 14~20 message history window and move its left edge only in
- * coarse 7-message blocks. app.ts currently supplies a rolling source window,
- * so the assistant turn number reconstructs the absolute history length.
+ * coarse 7-message blocks. app.ts supplies a rolling source window, so the
+ * assistant turn number reconstructs the absolute history length.
  */
 export function selectCacheFriendlyHistory(messages: Message[]): Message[] {
   if (messages.length <= 20) return messages;
