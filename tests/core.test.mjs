@@ -50,8 +50,8 @@ test("backup excludes runtime API key", () => {
   assert.equal(JSON.stringify(backup).includes("apiKey"), false);
 });
 
-test("history truncation keeps a compact cache-friendly block", () => {
-  const make = (index) => ({
+test("history truncation keeps the latest cache-friendly block", () => {
+  const source = Array.from({ length: 30 }, (_, index) => ({
     id: `m-${index}`,
     chatId: "c",
     role: index % 2 ? "user" : "assistant",
@@ -59,7 +59,6 @@ test("history truncation keeps a compact cache-friendly block", () => {
     createdAt: new Date(2026, 0, 1, 0, index).toISOString(),
     ...(index % 2 ? {} : { stateAfter: { turn: Math.floor(index / 2), dateTime: "2026-01-01T00:00:00.000Z", location: "거실", innerThought: "", affection: 0, mood: [] } }),
   }));
-  const source = Array.from({ length: 30 }, (_, index) => make(index));
   const selected = selectCacheFriendlyHistory(source);
   assert.ok(selected.length >= 14 && selected.length <= 20);
   assert.equal(selected.at(-1)?.id, source.at(-1)?.id);
