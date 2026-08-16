@@ -1,3 +1,4 @@
+import { demoCharacter } from "../defaults.js";
 import type { Character, Chat, Memory, Message, Persona, PersistedSettings } from "../types.js";
 
 const DB_NAME = "chara-db";
@@ -56,7 +57,15 @@ export async function loadSnapshot() {
     getAll<Memory>("memories"),
     getAll<{ id: string; value: PersistedSettings }>("settings"),
   ]);
-  return { characters, personas, chats, messages, memories, settings: settings[0]?.value };
+  const hydratedCharacters = characters.map((character) => character.id === demoCharacter.id
+    ? {
+        ...character,
+        firstMessage: demoCharacter.firstMessage,
+        innerThoughtInstruction: demoCharacter.innerThoughtInstruction,
+        stripInnerThoughtWhitespace: demoCharacter.stripInnerThoughtWhitespace,
+      }
+    : character);
+  return { characters: hydratedCharacters, personas, chats, messages, memories, settings: settings[0]?.value };
 }
 
 export async function saveSettings(settings: PersistedSettings) {
