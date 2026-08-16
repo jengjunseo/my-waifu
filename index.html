@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0c10" />
+  <title>Chara</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="splash" class="splash"><span class="brand-spark">✦</span><strong>Chara</strong></div>
+  <div id="app" class="app-shell" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand"><span class="brand-spark">✦</span><strong>Chara</strong><button id="sidebar-close" class="icon-button mobile-close" aria-label="닫기">×</button></div>
+      <button id="new-chat" class="new-chat-button"><span>＋</span> 새 대화</button>
+      <div class="sidebar-section-label">대화</div>
+      <div id="conversation-list" class="conversation-list"></div>
+      <div class="sidebar-bottom">
+        <button id="persona-open"><span>◉</span> 내 Persona</button>
+        <button id="character-open"><span>♙</span> 캐릭터 편집</button>
+        <button id="settings-open"><span>⚙</span> 설정</button>
+      </div>
+    </aside>
+    <button id="sidebar-scrim" class="sidebar-scrim" aria-label="사이드바 닫기"></button>
+
+    <main class="chat-stage">
+      <header class="chat-header">
+        <div class="header-left">
+          <button id="menu-open" class="icon-button menu-button" aria-label="메뉴">☰</button>
+          <div id="header-avatar"></div>
+          <div class="header-title"><strong id="header-name"></strong><span id="header-location"></span></div>
+        </div>
+        <div class="header-actions">
+          <button id="status-open" class="affection-button"><span>♥</span><b id="header-affection"></b></button>
+          <button id="memories-open" class="icon-button" title="기억">✦</button>
+          <button id="more-open" class="icon-button" aria-label="설정">•••</button>
+        </div>
+      </header>
+
+      <section id="message-scroll" class="message-scroll">
+        <div class="conversation-intro">
+          <div id="intro-avatar"></div>
+          <h1 id="intro-name"></h1>
+          <p id="intro-tagline"></p>
+        </div>
+        <div id="messages" class="messages"></div>
+      </section>
+
+      <div class="composer-zone">
+        <div id="error-banner" class="error-banner" hidden><span id="error-text"></span><button id="error-close">×</button></div>
+        <div class="composer">
+          <button id="composer-character" class="composer-plus" title="캐릭터">＋</button>
+          <textarea id="composer-input" rows="1" placeholder="메시지..."></textarea>
+          <button id="send-button" class="send-button" aria-label="전송">➤</button>
+        </div>
+        <div class="composer-hint">Enter 전송 · Shift+Enter 줄바꿈 · *상황 묘사*</div>
+      </div>
+    </main>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <section id="modal" class="modal">
+      <header class="modal-header"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button">×</button></header>
+      <div id="modal-body" class="modal-body"></div>
+    </section>
+  </div>
+  <input id="backup-file" type="file" accept="application/json,.json" hidden />
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

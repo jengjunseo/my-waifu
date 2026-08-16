@@ -1,0 +1,14 @@
+{
+  "name": "my-waifu",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.app.json && node scripts/copy-static.mjs",
+    "test": "npm run build && node --test tests/core.test.mjs",
+    "dev": "npm run build && node scripts/serve.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
