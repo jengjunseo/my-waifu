@@ -1,0 +1,40 @@
+/* Utility polish layered after the Crack-inspired surface. */
+
+.turn-hud-thought {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+
+.composer-plus {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.streaming-row {
+  padding: 24px 0 28px;
+}
+
+.streaming-content {
+  width: 100%;
+  max-width: none;
+}
+
+.streaming-rich-text {
+  min-height: 1.8em;
+}
+
+.stream-caret {
+  display: inline-block;
+  margin-left: 1px;
+  color: #ffc400;
+  animation: stream-caret-blink .72s steps(1, end) infinite;
+}
+
+@keyframes stream-caret-blink {
+  0%, 55% { opacity: .95; }
+  56%, 100% { opacity: .18; }
+}
