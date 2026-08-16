@@ -8,10 +8,10 @@ const lengthGuide: Record<PersistedSettings["responseLength"], string> = {
 };
 
 /**
- * Keep a stable 14~20 message prefix window for several turns instead of
- * sliding one message at a time. We use the absolute assistant turn number
- * when available, so the cut point stays stable even though app.ts supplies a
- * rolling 30-message source window.
+ * Keep a stable 14~20 message history window and move its left edge only in
+ * coarse 7-message blocks. app.ts currently supplies a rolling source window,
+ * so the assistant turn number is used to reconstruct the absolute history
+ * length and preserve a stable cut point across adjacent turns.
  */
 export function selectCacheFriendlyHistory(messages: Message[]): Message[] {
   if (messages.length <= 20) return messages;
@@ -21,12 +21,17 @@ export function selectCacheFriendlyHistory(messages: Message[]): Message[] {
     .find((message) => message.role === "assistant" && message.stateAfter)?.stateAfter?.turn;
 
   if (typeof lastAssistantTurn === "number" && Number.isFinite(lastAssistantTurn)) {
-    const desired = 14 + (lastAssistantTurn % 7);
-    return messages.slice(-Math.min(20, Math.max(14, desired)));
+    const absoluteCount = Math.max(messages.length, Math.round(lastAssistantTurn) * 2 + 1);
+    const absoluteDrop = Math.floor((absoluteCount - 14) / 7) * 7;
+    const sourceAbsoluteStart = Math.max(0, absoluteCount - messages.length);
+    const localDrop = Math.max(0, absoluteDrop - sourceAbsoluteStart);
+    const selected = messages.slice(localDrop);
+    return selected.length > 20 ? selected.slice(-20) : selected;
   }
 
-  const dropCount = Math.ceil((messages.length - 20) / 7) * 7;
-  return messages.slice(dropCount);
+  const dropCount = Math.floor((messages.length - 14) / 7) * 7;
+  const selected = messages.slice(Math.max(0, dropCount));
+  return selected.length > 20 ? selected.slice(-20) : selected;
 }
 
 export function buildContext(args: {
