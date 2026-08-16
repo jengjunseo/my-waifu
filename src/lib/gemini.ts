@@ -58,6 +58,16 @@ function validateResult(value: unknown): ModelTurnResult {
   };
 }
 
+function finishReasonMessage(finishReason: string, blockReason = ""): string | null {
+  if (finishReason === "MAX_TOKENS") return "Gemini 응답이 출력 한도에서 잘렸습니다. 재시도해 주세요.";
+  if (finishReason === "SAFETY" || blockReason === "SAFETY") return "Gemini 안전 필터로 응답이 중단되었습니다.";
+  if (finishReason === "RECITATION") return "Gemini가 인용/반복 제한으로 응답을 중단했습니다.";
+  if (finishReason === "LANGUAGE") return "Gemini가 언어 관련 제한으로 응답을 중단했습니다.";
+  if (finishReason && finishReason !== "STOP") return `Gemini 응답이 비정상적으로 종료되었습니다. (${finishReason})`;
+  if (blockReason) return `Gemini 요청이 차단되었습니다. (${blockReason})`;
+  return null;
+}
+
 export async function generateCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
   if (!apiKey.trim()) throw new Error("Gemini API Key를 먼저 설정해 주세요.");
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
@@ -72,7 +82,10 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
       generationConfig: {
         responseMimeType: "application/json",
         responseJsonSchema: responseSchema,
-        maxOutputTokens: 2400,
+        maxOutputTokens: 8192,
+        thinkingConfig: {
+          thinkingLevel: "MINIMAL",
+        },
       },
     }),
   });
@@ -89,12 +102,23 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
   }
 
   const json = await response.json();
-  const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
-  if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다.");
+  const candidate = json?.candidates?.[0];
+  const finishReason = typeof candidate?.finishReason === "string" ? candidate.finishReason : "";
+  const blockReason = typeof json?.promptFeedback?.blockReason === "string" ? json.promptFeedback.blockReason : "";
+  const text = candidate?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
+
+  if (!text) {
+    const reason = finishReasonMessage(finishReason, blockReason);
+    throw new Error(reason ?? "Gemini가 빈 응답을 반환했습니다.");
+  }
+
   try {
     return validateResult(JSON.parse(text));
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error("Gemini 응답 JSON을 해석하지 못했습니다. 재시도해 주세요.");
+    if (error instanceof SyntaxError) {
+      const reason = finishReasonMessage(finishReason, blockReason);
+      throw new Error(reason ?? `Gemini 응답 JSON을 해석하지 못했습니다.${finishReason ? ` (finishReason: ${finishReason})` : ""} 재시도해 주세요.`);
+    }
     throw error;
   }
 }
