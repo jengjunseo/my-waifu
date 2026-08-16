@@ -70,13 +70,8 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 1.0,
-        responseFormat: {
-          text: {
-            mimeType: "application/json",
-            schema: responseSchema,
-          },
-        },
+        responseMimeType: "application/json",
+        responseJsonSchema: responseSchema,
       },
     }),
   });
