@@ -2,15 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { demoCharacter } from "../dist/defaults.js";
 import { createBackup } from "../dist/lib/backup.js";
+import { selectCacheFriendlyHistory } from "../dist/lib/context.js";
 import { parseNarration } from "../dist/lib/narration.js";
 import { removeGeneratedMemories, restoreStateSnapshot } from "../dist/lib/regenerate.js";
 import { advanceNarrativeTime, applyAffectionDelta, applyModelState, normalizeInnerThought } from "../dist/lib/state.js";
 
 test("asterisk narration is parsed without exposing markers", () => {
-  assert.deepEqual(parseNarration('"안녕."\n\n*도아는 손을 흔들었다.*\n\n"뭐 해?"'), [
-    { kind: "dialogue", text: '"안녕."\n\n' },
+  assert.deepEqual(parseNarration('\"안녕.\"\n\n*도아는 손을 흔들었다.*\n\n\"뭐 해?\"'), [
+    { kind: "dialogue", text: '\"안녕.\"\n\n' },
     { kind: "narration", text: "도아는 손을 흔들었다." },
-    { kind: "dialogue", text: '\n\n"뭐 해?"' },
+    { kind: "dialogue", text: '\n\n\"뭐 해?\"' },
   ]);
 });
 
@@ -47,4 +48,19 @@ test("regenerate removes ghost memories produced by discarded response", () => {
 test("backup excludes runtime API key", () => {
   const backup = createBackup({ characters: [], personas: [], chats: [], messages: [], memories: [], settings: { modelId: "gemini-3.5-flash", responseLength: "normal", rememberApiKey: true } });
   assert.equal(JSON.stringify(backup).includes("apiKey"), false);
+});
+
+test("history truncation keeps a compact cache-friendly block", () => {
+  const make = (index) => ({
+    id: `m-${index}`,
+    chatId: "c",
+    role: index % 2 ? "user" : "assistant",
+    content: String(index),
+    createdAt: new Date(2026, 0, 1, 0, index).toISOString(),
+    ...(index % 2 ? {} : { stateAfter: { turn: Math.floor(index / 2), dateTime: "2026-01-01T00:00:00.000Z", location: "거실", innerThought: "", affection: 0, mood: [] } }),
+  }));
+  const source = Array.from({ length: 30 }, (_, index) => make(index));
+  const selected = selectCacheFriendlyHistory(source);
+  assert.ok(selected.length >= 14 && selected.length <= 20);
+  assert.equal(selected.at(-1)?.id, source.at(-1)?.id);
 });
