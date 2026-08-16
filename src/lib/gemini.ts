@@ -68,9 +68,58 @@ function finishReasonMessage(finishReason: string, blockReason = ""): string | n
   return null;
 }
 
+function dispatchReplyStream(reply: string, done = false) {
+  if (typeof window === "undefined" || typeof CustomEvent === "undefined") return;
+  window.dispatchEvent(new CustomEvent("chara:reply-stream", { detail: { reply, done } }));
+}
+
+function appendStreamText(current: string, chunk: string): string {
+  if (!chunk) return current;
+  if (chunk.startsWith(current)) return chunk;
+  if (current.endsWith(chunk)) return current;
+  return current + chunk;
+}
+
+export function extractPartialReply(source: string): string {
+  const match = /"reply"\s*:\s*"/.exec(source);
+  if (!match) return "";
+  let output = "";
+  for (let index = match.index + match[0].length; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '"') return output;
+    if (char !== "\\") {
+      output += char;
+      continue;
+    }
+    if (index + 1 >= source.length) return output;
+    const escaped = source[++index];
+    if (escaped === '"' || escaped === "\\" || escaped === "/") output += escaped;
+    else if (escaped === "b") output += "\b";
+    else if (escaped === "f") output += "\f";
+    else if (escaped === "n") output += "\n";
+    else if (escaped === "r") output += "\r";
+    else if (escaped === "t") output += "\t";
+    else if (escaped === "u") {
+      const hex = source.slice(index + 1, index + 5);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) return output;
+      output += String.fromCharCode(Number.parseInt(hex, 16));
+      index += 4;
+    }
+  }
+  return output;
+}
+
+type StreamEnvelope = {
+  candidates?: Array<{
+    finishReason?: string;
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  promptFeedback?: { blockReason?: string };
+};
+
 export async function generateCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
   if (!apiKey.trim()) throw new Error("Gemini API Key를 먼저 설정해 주세요.");
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -100,20 +149,60 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
     }
     throw new Error(`Gemini 요청에 실패했습니다. (${response.status})${detail}`);
   }
+  if (!response.body) throw new Error("Gemini 스트리밍 응답을 읽을 수 없습니다.");
 
-  const json = await response.json();
-  const candidate = json?.candidates?.[0];
-  const finishReason = typeof candidate?.finishReason === "string" ? candidate.finishReason : "";
-  const blockReason = typeof json?.promptFeedback?.blockReason === "string" ? json.promptFeedback.blockReason : "";
-  const text = candidate?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
+  let fullText = "";
+  let lastPreview = "";
+  let finishReason = "";
+  let blockReason = "";
+  let buffer = "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
 
-  if (!text) {
+  const consumeEvent = (block: string) => {
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let envelope: StreamEnvelope;
+      try {
+        envelope = JSON.parse(payload) as StreamEnvelope;
+      } catch {
+        continue;
+      }
+      const candidate = envelope.candidates?.[0];
+      if (typeof candidate?.finishReason === "string") finishReason = candidate.finishReason;
+      if (typeof envelope.promptFeedback?.blockReason === "string") blockReason = envelope.promptFeedback.blockReason;
+      const chunk = candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+      fullText = appendStreamText(fullText, chunk);
+      const preview = extractPartialReply(fullText);
+      if (preview && preview !== lastPreview) {
+        lastPreview = preview;
+        dispatchReplyStream(preview);
+      }
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) consumeEvent(block);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeEvent(buffer);
+
+  const finalPreview = extractPartialReply(fullText);
+  if (finalPreview) dispatchReplyStream(finalPreview, true);
+
+  if (!fullText) {
     const reason = finishReasonMessage(finishReason, blockReason);
     throw new Error(reason ?? "Gemini가 빈 응답을 반환했습니다.");
   }
 
   try {
-    return validateResult(JSON.parse(text));
+    return validateResult(JSON.parse(fullText));
   } catch (error) {
     if (error instanceof SyntaxError) {
       const reason = finishReasonMessage(finishReason, blockReason);
