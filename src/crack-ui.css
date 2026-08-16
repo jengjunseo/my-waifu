@@ -165,7 +165,6 @@ html, body, #root,
   background: #1c1c1a;
 }
 
-/* INFO block under each assistant reply */
 .turn-hud {
   position: relative;
   width: 100%;
@@ -212,7 +211,13 @@ html, body, #root,
 .turn-hud-turn { color: #d5a35e; }
 .turn-hud-date { color: #c9b286; }
 .turn-hud-location { color: #d6a3ab; }
-.turn-hud-thought { color: #cbc7bf !important; }
+.turn-hud-thought {
+  color: #cbc7bf !important;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
 .turn-hud-affection { color: #df8aa5 !important; }
 
 .typing-row {
@@ -221,6 +226,14 @@ html, body, #root,
 
 .typing-row > .avatar { display: none !important; }
 .typing-dots { padding-left: 2px; }
+.streaming-row { min-height: 56px; }
+.streaming-rich-text { min-height: 24px; }
+.stream-caret {
+  color: #e0b43b;
+  opacity: .8;
+  animation: stream-caret 1s steps(1) infinite;
+}
+@keyframes stream-caret { 50% { opacity: .2; } }
 
 .composer-zone {
   position: relative;
@@ -357,6 +370,36 @@ html, body, #root,
   border-color: #363530;
 }
 
+.latency-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 2px 0 14px;
+}
+
+.latency-presets > small {
+  grid-column: 1 / -1;
+  color: #77736b;
+  font-size: 11px;
+}
+
+.latency-presets button {
+  padding: 10px 12px;
+  border: 1px solid #363530;
+  border-radius: 9px;
+  background: #111110;
+  color: #c9c5bc;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.latency-presets button:hover {
+  border-color: #55534c;
+  background: #1d1d1b;
+  color: #eee9df;
+}
+
 @media (max-width: 900px) {
   .conversation-intro,
   .messages,
@@ -382,4 +425,6 @@ html, body, #root,
   .turn-hud { font-size: 11.5px !important; margin-top: 20px !important; }
   .composer-zone { padding-left: 8px; padding-right: 8px; }
   .scroll-to-bottom { right: 14px; bottom: 122px; }
+  .latency-presets { grid-template-columns: 1fr; }
+  .latency-presets > small { grid-column: 1; }
 }
