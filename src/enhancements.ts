@@ -8,28 +8,66 @@ function mustQuery<T extends Element>(selector: string): T {
 }
 
 const messagesRoot = mustQuery<HTMLElement>("#messages");
+const messageScroll = mustQuery<HTMLElement>("#message-scroll");
+const chatStage = mustQuery<HTMLElement>(".chat-stage");
+const composer = mustQuery<HTMLElement>(".composer");
 const composerInput = mustQuery<HTMLTextAreaElement>("#composer-input");
 const sendButton = mustQuery<HTMLButtonElement>("#send-button");
+const characterButton = mustQuery<HTMLButtonElement>("#composer-character");
 
-const style = document.createElement("style");
-style.textContent = `
-.turn-hud {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(255,255,255,.06);
-  color: #717783;
-  font-size: 11.5px;
-  line-height: 1.62;
-  letter-spacing: -.01em;
+function keepCrackComposerLabel() {
+  composerInput.placeholder = "메시지 보내기";
 }
-.turn-hud-line { white-space: pre-wrap; overflow-wrap: anywhere; }
-.turn-hud-thought { color: #838996; }
-.turn-hud-affection { color: #b78696; }
-@media (max-width: 600px) {
-  .turn-hud { font-size: 11px; margin-top: 14px; padding-top: 10px; }
+
+function installComposerTools() {
+  if (composer.querySelector(".composer-tools")) return;
+  const tools = document.createElement("div");
+  tools.className = "composer-tools";
+
+  characterButton.textContent = "✦";
+  characterButton.title = "캐릭터 편집";
+  tools.append(characterButton);
+
+  const persona = document.createElement("button");
+  persona.type = "button";
+  persona.className = "composer-tool";
+  persona.textContent = "/";
+  persona.title = "Persona";
+  persona.setAttribute("aria-label", "Persona 열기");
+  persona.addEventListener("click", () => (document.querySelector<HTMLButtonElement>("#persona-open"))?.click());
+
+  const settings = document.createElement("button");
+  settings.type = "button";
+  settings.className = "composer-tool";
+  settings.textContent = "☷";
+  settings.title = "설정";
+  settings.setAttribute("aria-label", "설정 열기");
+  settings.addEventListener("click", () => (document.querySelector<HTMLButtonElement>("#settings-open"))?.click());
+
+  tools.append(persona, settings);
+  composer.insertBefore(tools, sendButton);
 }
-`;
-document.head.append(style);
+
+function installScrollToBottom() {
+  if (chatStage.querySelector(".scroll-to-bottom")) return;
+  const control = document.createElement("button");
+  control.type = "button";
+  control.className = "scroll-to-bottom";
+  control.textContent = "⌃";
+  control.title = "최신 메시지로";
+  control.setAttribute("aria-label", "최신 메시지로 이동");
+  control.hidden = true;
+  control.addEventListener("click", () => messageScroll.scrollTo({ top: messageScroll.scrollHeight, behavior: "smooth" }));
+  chatStage.append(control);
+
+  const sync = () => {
+    const distance = messageScroll.scrollHeight - messageScroll.scrollTop - messageScroll.clientHeight;
+    control.hidden = distance < 220;
+  };
+  messageScroll.addEventListener("scroll", sync, { passive: true });
+  new ResizeObserver(sync).observe(messageScroll);
+  sync();
+}
 
 function normalizeText(value: string): string {
   return value.replace(/\*/g, "").replace(/\s+/g, " ").trim();
@@ -55,9 +93,9 @@ function createHud(message: Message): HTMLElement | null {
   const hud = document.createElement("div");
   hud.className = "turn-hud";
   const lines: Array<[string, string]> = [
-    ["turn-hud-line", `⏳ [${state.turn}]`],
-    ["turn-hud-line", `📆 날짜/시간: [${formatNarrativeDate(state.dateTime)}]`],
-    ["turn-hud-line", `📍 위치: [${state.location || "-"}]`],
+    ["turn-hud-line turn-hud-turn", `⏳ [${state.turn}]`],
+    ["turn-hud-line turn-hud-date", `📆 날짜/시간: [${formatNarrativeDate(state.dateTime)}]`],
+    ["turn-hud-line turn-hud-location", `📍 위치: [${state.location || "-"}]`],
     ["turn-hud-line turn-hud-thought", `💭 생각: [${state.innerThought || "-"}]`],
     ["turn-hud-line turn-hud-affection", `💗[${state.affection}]: ${affectionDelta(message)}`],
   ];
@@ -106,6 +144,21 @@ async function resolveActiveMessages(): Promise<Message[]> {
   return best?.messages ?? [];
 }
 
+function polishMessageActions() {
+  for (const action of messagesRoot.querySelectorAll<HTMLButtonElement>(".message-actions button")) {
+    const raw = action.textContent?.trim() ?? "";
+    if (raw === "복사") {
+      action.textContent = "⧉";
+      action.title = "복사";
+      action.setAttribute("aria-label", "메시지 복사");
+    } else if (raw.includes("재생성")) {
+      action.textContent = "↻";
+      action.title = "재생성";
+      action.setAttribute("aria-label", "답변 재생성");
+    }
+  }
+}
+
 let refreshQueued = false;
 function queueHudRefresh() {
   if (refreshQueued) return;
@@ -117,6 +170,8 @@ function queueHudRefresh() {
 }
 
 async function refreshHud() {
+  keepCrackComposerLabel();
+  polishMessageActions();
   const timeline = visibleTimeline();
   const matchedMessages = await resolveActiveMessages();
   if (timeline.length !== matchedMessages.length) return;
@@ -172,8 +227,13 @@ const observer = new MutationObserver(() => {
   const typing = Boolean(messagesRoot.querySelector(".typing-row"));
   if (typing) sawTyping = true;
   if (sendLocked && sawTyping && !typing) unlockSendGuard();
+  keepCrackComposerLabel();
+  polishMessageActions();
   queueHudRefresh();
 });
 observer.observe(messagesRoot, { childList: true, subtree: true });
 
+installComposerTools();
+installScrollToBottom();
+keepCrackComposerLabel();
 queueHudRefresh();
