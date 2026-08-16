@@ -64,12 +64,14 @@ function installComposerTools() {
   composer.insertBefore(tools, sendButton);
 }
 
+let syncScrollControl: (() => void) | null = null;
+
 function installScrollToBottom() {
   if (chatStage.querySelector(".scroll-to-bottom")) return;
   const control = document.createElement("button");
   control.type = "button";
   control.className = "scroll-to-bottom";
-  control.textContent = "⌃";
+  control.textContent = "⌄";
   control.title = "최신 메시지로";
   control.setAttribute("aria-label", "최신 메시지로 이동");
   control.hidden = true;
@@ -78,8 +80,9 @@ function installScrollToBottom() {
 
   const sync = () => {
     const distance = messageScroll.scrollHeight - messageScroll.scrollTop - messageScroll.clientHeight;
-    control.hidden = distance < 220;
+    control.hidden = distance < 180;
   };
+  syncScrollControl = sync;
   messageScroll.addEventListener("scroll", sync, { passive: true });
   new ResizeObserver(sync).observe(messageScroll);
   sync();
@@ -178,6 +181,7 @@ function polishMessageActions() {
 function renderStreamText(content: string) {
   const row = messagesRoot.querySelector<HTMLElement>(".typing-row");
   if (!row) return;
+  const viewportTop = messageScroll.scrollTop;
   row.classList.add("streaming-row");
   let body = row.querySelector<HTMLElement>(".streaming-content");
   if (!body) {
@@ -199,19 +203,29 @@ function renderStreamText(content: string) {
   caret.textContent = "▍";
   rich.append(caret);
   body.replaceChildren(rich);
-  messageScroll.scrollTop = messageScroll.scrollHeight;
+  // Growing text must never drag the reader's viewport downward. The user can
+  // keep reading in place and scroll manually like a web novel.
+  messageScroll.scrollTop = viewportTop;
+  syncScrollControl?.();
 }
 
 let streamTarget = "";
 let streamShown = "";
 let streamFrame = 0;
+let streamLastFrame = 0;
 
-function animateStream() {
+function animateStream(timestamp: number) {
   streamFrame = 0;
   if (!messagesRoot.querySelector(".typing-row")) return;
   const remaining = streamTarget.length - streamShown.length;
   if (remaining <= 0) return;
-  const step = remaining > 180 ? 28 : remaining > 80 ? 18 : remaining > 30 ? 10 : 5;
+
+  const elapsed = streamLastFrame ? Math.min(50, timestamp - streamLastFrame) : 16.7;
+  streamLastFrame = timestamp;
+  // Roughly half the previous visual speed: ~200 chars/s normally, with a
+  // restrained catch-up ceiling so a bursty network stream never feels stuck.
+  const rate = remaining > 240 ? 320 : remaining > 100 ? 250 : 200;
+  const step = Math.max(1, Math.floor((rate * elapsed) / 1000));
   streamShown = streamTarget.slice(0, Math.min(streamTarget.length, streamShown.length + step));
   renderStreamText(streamShown);
   if (streamShown.length < streamTarget.length) streamFrame = requestAnimationFrame(animateStream);
@@ -223,8 +237,49 @@ window.addEventListener("chara:reply-stream", (event) => {
   if (!reply) return;
   if (!reply.startsWith(streamShown)) streamShown = "";
   streamTarget = reply;
-  if (!streamFrame) streamFrame = requestAnimationFrame(animateStream);
+  if (!streamFrame) {
+    streamLastFrame = 0;
+    streamFrame = requestAnimationFrame(animateStream);
+  }
 });
+
+function installSettingsPresets() {
+  if (document.querySelector(".latency-presets")) return;
+  const title = document.querySelector<HTMLElement>("#modal-title");
+  const body = document.querySelector<HTMLElement>("#modal-body");
+  if (!title || !body || title.textContent?.trim() !== "설정") return;
+
+  const fields = Array.from(body.querySelectorAll<HTMLElement>(".field"));
+  const modelField = fields.find((field) => field.querySelector("span")?.textContent?.trim() === "Model ID");
+  const lengthField = fields.find((field) => field.querySelector("span")?.textContent?.trim() === "응답 길이");
+  const modelInput = modelField?.querySelector<HTMLInputElement>("input");
+  const lengthSelect = lengthField?.querySelector<HTMLSelectElement>("select");
+  if (!modelInput || !lengthSelect || !modelField) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "latency-presets";
+  const label = document.createElement("small");
+  label.textContent = "빠른 프리셋";
+
+  const quality = document.createElement("button");
+  quality.type = "button";
+  quality.textContent = "♥ 기본 · Flash · 400–500";
+  quality.addEventListener("click", () => {
+    modelInput.value = "gemini-3.5-flash";
+    lengthSelect.value = "normal";
+  });
+
+  const turbo = document.createElement("button");
+  turbo.type = "button";
+  turbo.textContent = "⚡ Turbo · Flash-Lite · 250–350";
+  turbo.addEventListener("click", () => {
+    modelInput.value = "gemini-3.5-flash-lite";
+    lengthSelect.value = "concise";
+  });
+
+  wrap.append(label, quality, turbo);
+  modelField.insertAdjacentElement("beforebegin", wrap);
+}
 
 let refreshQueued = false;
 function queueHudRefresh() {
@@ -259,6 +314,7 @@ async function refreshHud() {
 let sendLocked = false;
 let sawTyping = false;
 let unlockTimer = 0;
+let hadTyping = false;
 
 function unlockSendGuard() {
   sendLocked = false;
@@ -292,21 +348,39 @@ document.addEventListener("keydown", (event) => {
 
 const observer = new MutationObserver(() => {
   const typing = Boolean(messagesRoot.querySelector(".typing-row"));
-  if (typing) sawTyping = true;
+  if (typing) {
+    sawTyping = true;
+    hadTyping = true;
+  }
+  if (!typing && hadTyping) {
+    // app.ts still schedules a final scroll-to-bottom after replacing the
+    // streaming row. Capture the reader's current position and restore it in a
+    // later RAF so completion never yanks the viewport away.
+    const viewportTop = messageScroll.scrollTop;
+    requestAnimationFrame(() => {
+      messageScroll.scrollTop = viewportTop;
+      syncScrollControl?.();
+    });
+    hadTyping = false;
+  }
   if (!typing) {
     streamTarget = "";
     streamShown = "";
+    streamLastFrame = 0;
     if (streamFrame) cancelAnimationFrame(streamFrame);
     streamFrame = 0;
   }
   if (sendLocked && sawTyping && !typing) unlockSendGuard();
   keepCrackComposerLabel();
   polishMessageActions();
+  installSettingsPresets();
   queueHudRefresh();
+  syncScrollControl?.();
 });
-observer.observe(messagesRoot, { childList: true, subtree: true });
+observer.observe(document.body, { childList: true, subtree: true });
 
 installComposerTools();
 installScrollToBottom();
 keepCrackComposerLabel();
+installSettingsPresets();
 queueHudRefresh();
