@@ -1,5 +1,6 @@
 import type { Chat, Message } from "./types.js";
 import { getAll } from "./lib/db.js";
+import { parseNarration } from "./lib/narration.js";
 
 function mustQuery<T extends Element>(selector: string): T {
   const node = document.querySelector<T>(selector);
@@ -19,13 +20,28 @@ function keepCrackComposerLabel() {
   composerInput.placeholder = "메시지 보내기";
 }
 
+function insertNarrationPair(event: Event) {
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  const start = composerInput.selectionStart ?? composerInput.value.length;
+  const end = composerInput.selectionEnd ?? start;
+  composerInput.setRangeText("**", start, end, "end");
+  const cursor = start + 1;
+  composerInput.setSelectionRange(cursor, cursor);
+  composerInput.focus();
+  composerInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function installComposerTools() {
   if (composer.querySelector(".composer-tools")) return;
   const tools = document.createElement("div");
   tools.className = "composer-tools";
 
-  characterButton.textContent = "✦";
-  characterButton.title = "캐릭터 편집";
+  characterButton.textContent = "*";
+  characterButton.title = "상황 묘사 입력";
+  characterButton.setAttribute("aria-label", "별표 상황 묘사 입력");
+  characterButton.addEventListener("click", insertNarrationPair, true);
   tools.append(characterButton);
 
   const persona = document.createElement("button");
@@ -159,6 +175,57 @@ function polishMessageActions() {
   }
 }
 
+function renderStreamText(content: string) {
+  const row = messagesRoot.querySelector<HTMLElement>(".typing-row");
+  if (!row) return;
+  row.classList.add("streaming-row");
+  let body = row.querySelector<HTMLElement>(".streaming-content");
+  if (!body) {
+    row.replaceChildren();
+    body = document.createElement("div");
+    body.className = "assistant-content streaming-content";
+    row.append(body);
+  }
+  const rich = document.createElement("div");
+  rich.className = "rich-text streaming-rich-text";
+  for (const segment of parseNarration(content)) {
+    const span = document.createElement("span");
+    span.className = segment.kind;
+    span.textContent = segment.text;
+    rich.append(span);
+  }
+  const caret = document.createElement("span");
+  caret.className = "stream-caret";
+  caret.textContent = "▍";
+  rich.append(caret);
+  body.replaceChildren(rich);
+  messageScroll.scrollTop = messageScroll.scrollHeight;
+}
+
+let streamTarget = "";
+let streamShown = "";
+let streamFrame = 0;
+
+function animateStream() {
+  streamFrame = 0;
+  if (!messagesRoot.querySelector(".typing-row")) return;
+  const remaining = streamTarget.length - streamShown.length;
+  if (remaining <= 0) return;
+  const step = remaining > 180 ? 28 : remaining > 80 ? 18 : remaining > 30 ? 10 : 5;
+  streamShown = streamTarget.slice(0, Math.min(streamTarget.length, streamShown.length + step));
+  renderStreamText(streamShown);
+  if (streamShown.length < streamTarget.length) streamFrame = requestAnimationFrame(animateStream);
+}
+
+window.addEventListener("chara:reply-stream", (event) => {
+  const detail = (event as CustomEvent<{ reply?: string }>).detail;
+  const reply = typeof detail?.reply === "string" ? detail.reply : "";
+  if (!reply) return;
+  if (!reply.startsWith(streamShown)) streamShown = "";
+  streamTarget = reply;
+  if (!streamFrame) streamFrame = requestAnimationFrame(animateStream);
+});
+
 let refreshQueued = false;
 function queueHudRefresh() {
   if (refreshQueued) return;
@@ -226,6 +293,12 @@ document.addEventListener("keydown", (event) => {
 const observer = new MutationObserver(() => {
   const typing = Boolean(messagesRoot.querySelector(".typing-row"));
   if (typing) sawTyping = true;
+  if (!typing) {
+    streamTarget = "";
+    streamShown = "";
+    if (streamFrame) cancelAnimationFrame(streamFrame);
+    streamFrame = 0;
+  }
   if (sendLocked && sawTyping && !typing) unlockSendGuard();
   keepCrackComposerLabel();
   polishMessageActions();
