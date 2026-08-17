@@ -76,10 +76,14 @@ test("Gemini stream deltas are concatenated verbatim even when adjacent chunks r
   assert.equal(JSON.parse(reconstructed).reply, "ㅋㅋㅋㅋ");
 });
 
-test("reply normalization converts accidentally double-escaped newlines into real paragraphs", () => {
+test("reply normalization converts escaped and URI-encoded newlines into real paragraphs", () => {
   assert.equal(
     normalizeReplyText('*도아가 고개를 든다.*\\n\\n\"뭐야아?\"\\n\\n*입술을 삐죽인다.*'),
     '*도아가 고개를 든다.*\n\n\"뭐야아?\"\n\n*입술을 삐죽인다.*',
+  );
+  assert.equal(
+    normalizeReplyText('*도아가 움찔한다.*%0A%0A\"하아?!\"%0D%0A%0D%0A*눈치를 본다.*'),
+    '*도아가 움찔한다.*\n\n\"하아?!\"\n\n*눈치를 본다.*',
   );
   assert.equal(normalizeReplyText('첫 문단\n\n\n\n둘째 문단'), '첫 문단\n\n둘째 문단');
 });
