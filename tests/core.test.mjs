@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { demoCharacter } from "../dist/defaults.js";
 import { createBackup } from "../dist/lib/backup.js";
 import { selectCacheFriendlyHistory } from "../dist/lib/context.js";
-import { appendStreamText, collectCandidateText, parseSseEventBlock } from "../dist/lib/gemini.js";
+import { appendStreamText, collectCandidateText, normalizeReplyText, parseSseEventBlock } from "../dist/lib/gemini.js";
 import { parseNarration } from "../dist/lib/narration.js";
 import { removeGeneratedMemories, restoreStateSnapshot } from "../dist/lib/regenerate.js";
 import { advanceNarrativeTime, applyAffectionDelta, applyModelState, normalizeInnerThought } from "../dist/lib/state.js";
@@ -74,6 +74,14 @@ test("Gemini stream deltas are concatenated verbatim even when adjacent chunks r
   ];
   const reconstructed = chunks.reduce(appendStreamText, "");
   assert.equal(JSON.parse(reconstructed).reply, "ㅋㅋㅋㅋ");
+});
+
+test("reply normalization converts accidentally double-escaped newlines into real paragraphs", () => {
+  assert.equal(
+    normalizeReplyText('*도아가 고개를 든다.*\\n\\n\"뭐야아?\"\\n\\n*입술을 삐죽인다.*'),
+    '*도아가 고개를 든다.*\n\n\"뭐야아?\"\n\n*입술을 삐죽인다.*',
+  );
+  assert.equal(normalizeReplyText('첫 문단\n\n\n\n둘째 문단'), '첫 문단\n\n둘째 문단');
 });
 
 test("SSE event parser joins data fields and rejects malformed complete events", () => {
