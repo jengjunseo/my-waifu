@@ -73,10 +73,8 @@ function dispatchReplyStream(reply: string, done = false) {
   window.dispatchEvent(new CustomEvent("chara:reply-stream", { detail: { reply, done } }));
 }
 
-function appendStreamText(current: string, chunk: string): string {
-  if (!chunk) return current;
-  if (chunk.startsWith(current)) return chunk;
-  if (current.endsWith(chunk)) return current;
+/** Gemini structured-output streaming chunks are deltas. Never deduplicate them. */
+export function appendStreamText(current: string, chunk: string): string {
   return current + chunk;
 }
 
@@ -109,13 +107,53 @@ export function extractPartialReply(source: string): string {
   return output;
 }
 
-type StreamEnvelope = {
-  candidates?: Array<{
-    finishReason?: string;
-    content?: { parts?: Array<{ text?: string }> };
-  }>;
+export type StreamPart = {
+  text?: string;
+  thought?: boolean;
+};
+
+export type StreamCandidate = {
+  finishReason?: string;
+  content?: { parts?: StreamPart[] };
+};
+
+export type StreamEnvelope = {
+  candidates?: StreamCandidate[];
   promptFeedback?: { blockReason?: string };
 };
+
+/**
+ * Parse one complete SSE event. Per the SSE data-field contract, multiple data
+ * lines are joined with a newline. A malformed complete event is an error: we
+ * must not silently drop a JSON delta and corrupt the final structured output.
+ */
+export function parseSseEventBlock(block: string): StreamEnvelope | null {
+  const dataLines: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    let value = line.slice(5);
+    if (value.startsWith(" ")) value = value.slice(1);
+    dataLines.push(value);
+  }
+
+  if (!dataLines.length) return null;
+  const payload = dataLines.join("\n").trim();
+  if (!payload || payload === "[DONE]") return null;
+
+  try {
+    return JSON.parse(payload) as StreamEnvelope;
+  } catch {
+    throw new Error("Gemini 스트리밍 이벤트 JSON을 해석하지 못했습니다. 연결이 손상되었거나 예상하지 못한 SSE 응답을 받았습니다.");
+  }
+}
+
+/** Ignore thought-summary parts and concatenate answer-text parts in order. */
+export function collectCandidateText(candidate: StreamCandidate): string {
+  return candidate.content?.parts
+    ?.filter((part) => part.thought !== true && typeof part.text === "string")
+    .map((part) => part.text ?? "")
+    .join("") ?? "";
+}
 
 export async function generateCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
   if (!apiKey.trim()) throw new Error("Gemini API Key를 먼저 설정해 주세요.");
@@ -156,30 +194,26 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
   let finishReason = "";
   let blockReason = "";
   let buffer = "";
+  let eventCount = 0;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
   const consumeEvent = (block: string) => {
-    for (const line of block.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      let envelope: StreamEnvelope;
-      try {
-        envelope = JSON.parse(payload) as StreamEnvelope;
-      } catch {
-        continue;
-      }
-      const candidate = envelope.candidates?.[0];
-      if (typeof candidate?.finishReason === "string") finishReason = candidate.finishReason;
-      if (typeof envelope.promptFeedback?.blockReason === "string") blockReason = envelope.promptFeedback.blockReason;
-      const chunk = candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
-      fullText = appendStreamText(fullText, chunk);
-      const preview = extractPartialReply(fullText);
-      if (preview && preview !== lastPreview) {
-        lastPreview = preview;
-        dispatchReplyStream(preview);
-      }
+    const envelope = parseSseEventBlock(block);
+    if (!envelope) return;
+    eventCount += 1;
+
+    const candidate = envelope.candidates?.[0];
+    if (typeof candidate?.finishReason === "string") finishReason = candidate.finishReason;
+    if (typeof envelope.promptFeedback?.blockReason === "string") blockReason = envelope.promptFeedback.blockReason;
+
+    const chunk = candidate ? collectCandidateText(candidate) : "";
+    fullText = appendStreamText(fullText, chunk);
+
+    const preview = extractPartialReply(fullText);
+    if (preview && preview !== lastPreview) {
+      lastPreview = preview;
+      dispatchReplyStream(preview);
     }
   };
 
@@ -201,12 +235,14 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
     throw new Error(reason ?? "Gemini가 빈 응답을 반환했습니다.");
   }
 
+  const finalText = fullText.replace(/^\uFEFF/, "").trim();
   try {
-    return validateResult(JSON.parse(fullText));
+    return validateResult(JSON.parse(finalText));
   } catch (error) {
     if (error instanceof SyntaxError) {
       const reason = finishReasonMessage(finishReason, blockReason);
-      throw new Error(reason ?? `Gemini 응답 JSON을 해석하지 못했습니다.${finishReason ? ` (finishReason: ${finishReason})` : ""} 재시도해 주세요.`);
+      const meta = `finishReason: ${finishReason || "없음"}, SSE events: ${eventCount}, chars: ${finalText.length}`;
+      throw new Error(reason ?? `Gemini 스트림의 최종 JSON을 해석하지 못했습니다. (${meta}) 재시도해 주세요.`);
     }
     throw error;
   }

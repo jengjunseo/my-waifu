@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { demoCharacter } from "../dist/defaults.js";
 import { createBackup } from "../dist/lib/backup.js";
 import { selectCacheFriendlyHistory } from "../dist/lib/context.js";
+import { appendStreamText, collectCandidateText, parseSseEventBlock } from "../dist/lib/gemini.js";
 import { parseNarration } from "../dist/lib/narration.js";
 import { removeGeneratedMemories, restoreStateSnapshot } from "../dist/lib/regenerate.js";
 import { advanceNarrativeTime, applyAffectionDelta, applyModelState, normalizeInnerThought } from "../dist/lib/state.js";
@@ -62,4 +63,35 @@ test("history truncation keeps the latest cache-friendly block", () => {
   const selected = selectCacheFriendlyHistory(source);
   assert.ok(selected.length >= 14 && selected.length <= 20);
   assert.equal(selected.at(-1)?.id, source.at(-1)?.id);
+});
+
+test("Gemini stream deltas are concatenated verbatim even when adjacent chunks repeat", () => {
+  assert.equal(appendStreamText("abc", "abc"), "abcabc");
+
+  const chunks = [
+    '{"reply":"ㅋㅋ',
+    'ㅋㅋ","state":{"innerThought":"x","location":"거실","timeElapsedMinutes":0,"affectionDelta":0,"mood":[]},"memoryCandidates":[]}',
+  ];
+  const reconstructed = chunks.reduce(appendStreamText, "");
+  assert.equal(JSON.parse(reconstructed).reply, "ㅋㅋㅋㅋ");
+});
+
+test("SSE event parser joins data fields and rejects malformed complete events", () => {
+  const parsed = parseSseEventBlock('event: message\ndata: {"candidates": [],\ndata: "promptFeedback": {}}');
+  assert.deepEqual(parsed, { candidates: [], promptFeedback: {} });
+  assert.equal(parseSseEventBlock("data: [DONE]"), null);
+  assert.throws(() => parseSseEventBlock('data: {"candidates":'), /스트리밍 이벤트 JSON/);
+});
+
+test("candidate text excludes thought-summary parts", () => {
+  const text = collectCandidateText({
+    content: {
+      parts: [
+        { text: "내부 요약", thought: true },
+        { text: '{"reply":"' },
+        { text: "안녕" },
+      ],
+    },
+  });
+  assert.equal(text, '{"reply":"안녕');
 });
