@@ -62,22 +62,28 @@ function installOpenRouterPresets() {
   if (!fields) return;
 
   const { keyField, keyInput, modelField, modelInput, lengthSelect } = fields;
+
+  // IMPORTANT: check the idempotency guard before touching any observed DOM.
+  // Reassigning textContent fires childList mutations even when the visible text
+  // is unchanged; doing that before this guard caused a MutationObserver feedback
+  // loop that could starve mobile touch/scroll handling.
+  let wrap = document.querySelector<HTMLElement>(".latency-presets");
+  if (wrap?.dataset.openrouterPresets === "1") return;
+
   const caption = keyField.querySelector<HTMLElement>("span");
-  if (caption) caption.textContent = "API Key · OpenRouter / Gemini";
+  const captionText = "API Key · OpenRouter / Gemini";
+  if (caption && caption.textContent !== captionText) caption.textContent = captionText;
   keyInput.placeholder = "sk-or-v1-...  /  AIza...";
 
   const keyNote = keyField.querySelector<HTMLElement>("small");
-  if (keyNote) {
-    keyNote.textContent = "OpenRouter 프리셋은 sk-or-v1-... 키를 사용합니다. 기존 gemini-* Model ID는 Gemini 키로 계속 사용할 수 있습니다. 키는 JSON 백업에 포함되지 않습니다.";
-  }
+  const keyNoteText = "OpenRouter 프리셋은 sk-or-v1-... 키를 사용합니다. 기존 gemini-* Model ID는 Gemini 키로 계속 사용할 수 있습니다. 키는 JSON 백업에 포함되지 않습니다.";
+  if (keyNote && keyNote.textContent !== keyNoteText) keyNote.textContent = keyNoteText;
 
-  let wrap = document.querySelector<HTMLElement>(".latency-presets");
   if (!wrap) {
     wrap = document.createElement("div");
     wrap.className = "latency-presets";
     modelField.insertAdjacentElement("beforebegin", wrap);
   }
-  if (wrap.dataset.openrouterPresets === "1") return;
   wrap.dataset.openrouterPresets = "1";
   wrap.replaceChildren();
 
