@@ -60,6 +60,14 @@ export async function loadSnapshot() {
   const hydratedCharacters = characters.map((character) => character.id === demoCharacter.id
     ? {
         ...character,
+        tagline: demoCharacter.tagline,
+        description: demoCharacter.description,
+        personality: demoCharacter.personality,
+        speechStyle: demoCharacter.speechStyle,
+        background: demoCharacter.background,
+        relationship: demoCharacter.relationship,
+        scenario: demoCharacter.scenario,
+        exampleDialogue: demoCharacter.exampleDialogue,
         firstMessage: demoCharacter.firstMessage,
         innerThoughtInstruction: demoCharacter.innerThoughtInstruction,
         stripInnerThoughtWhitespace: demoCharacter.stripInnerThoughtWhitespace,
