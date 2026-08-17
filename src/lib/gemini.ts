@@ -34,9 +34,6 @@ const responseSchema = {
 
 function normalizeReplyLineBreaks(text: string): string {
   return text
-    .replace(/%0D%0A/gi, "\n")
-    .replace(/%0A/gi, "\n")
-    .replace(/%0D/gi, "\n")
     .replace(/\\r\\n/g, "\n")
     .replace(/\\n/g, "\n")
     .replace(/\\r/g, "\n")
