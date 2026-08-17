@@ -293,27 +293,43 @@ function openRouterFinishReasonMessage(reason: string): string | null {
   return null;
 }
 
-function openRouterSupportsStrictSchema(modelId: string): boolean {
-  return modelId !== "minimax/minimax-m2-her";
+const DEFAULT_OPENROUTER_FREE_MODEL = "google/gemma-4-26b-a4b-it:free";
+const retiredOpenRouterPresetModels = new Set([
+  "deepseek/deepseek-v4-flash:free",
+  "z-ai/glm-4.7-flash",
+  "minimax/minimax-m2-her",
+  "z-ai/glm-4.5-air:free",
+  "openrouter/free",
+]);
+
+function resolveOpenRouterModelId(modelId: string): string {
+  const normalized = modelId.trim();
+  return retiredOpenRouterPresetModels.has(normalized) ? DEFAULT_OPENROUTER_FREE_MODEL : normalized;
 }
 
-function openRouterReasoningOff(modelId: string): boolean {
-  return modelId.startsWith("deepseek/deepseek-v4-flash")
-    || modelId.startsWith("z-ai/glm-4.7-flash")
-    || modelId.startsWith("z-ai/glm-4.5-air");
+function isOpenRouterFreeModel(modelId: string): boolean {
+  return modelId.endsWith(":free");
 }
 
-const OPENROUTER_JSON_REMINDER = `\n\n# OPENROUTER JSON REMINDER\n반드시 설명, 코드펜스, 접두사 없이 JSON 객체 하나만 출력한다. 최상위 키는 reply, state, memoryCandidates 세 개다. state에는 innerThought, location, timeElapsedMinutes, affectionDelta, mood를 모두 포함한다.`;
+const OPENROUTER_JSON_REMINDER = `\n\n# OPENROUTER JSON REMINDER\n반드시 설명, 코드펜스, 접두사 없이 JSON 객체 하나만 출력한다. 최상위 키는 reply, state, memoryCandidates 세 개다. state에는 innerThought, location, timeElapsedMinutes, affectionDelta, mood를 모두 포함한다. reply를 반드시 첫 번째 키로 출력한다.`;
 
 function buildOpenRouterBody(modelId: string, prompt: string, structured: boolean) {
+  const freeModel = isOpenRouterFreeModel(modelId);
   const body: Record<string, unknown> = {
     model: modelId,
     messages: [{ role: "user", content: prompt + OPENROUTER_JSON_REMINDER }],
     stream: true,
-    max_tokens: 8192,
+    // Chara normally asks for ~400-500 response tokens plus a compact state
+    // envelope. Keeping free-route output bounded avoids needless long-running
+    // generations and reasoning spillover.
+    max_tokens: freeModel ? 1800 : 8192,
   };
 
-  if (structured) {
+  // Free routes intentionally avoid capability-heavy parameters. A :free model
+  // may be backed by a provider that does not expose strict JSON schema or a
+  // controllable reasoning mode even when another provider for the same model
+  // does. Prompt-only JSON plus Chara's conservative parser is more portable.
+  if (!freeModel && structured) {
     body.response_format = {
       type: "json_schema",
       json_schema: {
@@ -324,29 +340,25 @@ function buildOpenRouterBody(modelId: string, prompt: string, structured: boolea
     };
   }
 
-  if (openRouterReasoningOff(modelId)) {
-    body.reasoning = { effort: "none" };
-  }
-
   return body;
 }
 
-async function openRouterFetch(apiKey: string, modelId: string, prompt: string): Promise<Response> {
+async function openRouterFetch(apiKey: string, rawModelId: string, prompt: string): Promise<{ response: Response; modelId: string }> {
+  const modelId = resolveOpenRouterModelId(rawModelId);
   const endpoint = "https://openrouter.ai/api/v1/chat/completions";
   const headers = {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${apiKey.trim()}`,
   };
-  const wantsStructured = openRouterSupportsStrictSchema(modelId);
+  const freeModel = isOpenRouterFreeModel(modelId);
+  const wantsStructured = !freeModel && modelId !== "minimax/minimax-m2-her";
+
   let response = await fetch(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(buildOpenRouterBody(modelId, prompt, wantsStructured)),
   });
 
-  // Some providers behind a model may not expose JSON-schema enforcement even
-  // when the model itself can still follow the prompt contract. Fall back once
-  // on parameter-validation errors instead of making the chat unusable.
   if (!response.ok && wantsStructured && (response.status === 400 || response.status === 422)) {
     response = await fetch(endpoint, {
       method: "POST",
@@ -354,12 +366,13 @@ async function openRouterFetch(apiKey: string, modelId: string, prompt: string):
       body: JSON.stringify(buildOpenRouterBody(modelId, prompt, false)),
     });
   }
-  return response;
+
+  return { response, modelId };
 }
 
-async function generateOpenRouterCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
+async function generateOpenRouterCharacterTurn(apiKey: string, rawModelId: string, prompt: string): Promise<ModelTurnResult> {
   if (!apiKey.trim()) throw new Error("OpenRouter API Key를 먼저 설정해 주세요. (sk-or-v1-...) ");
-  const response = await openRouterFetch(apiKey, modelId, prompt);
+  const { response, modelId } = await openRouterFetch(apiKey, rawModelId, prompt);
   if (!response.ok) {
     let detail = "";
     try {
@@ -368,7 +381,7 @@ async function generateOpenRouterCharacterTurn(apiKey: string, modelId: string, 
     } catch {
       // avoid leaking raw response bodies
     }
-    throw new Error(`OpenRouter 요청에 실패했습니다. (${response.status})${detail}`);
+    throw new Error(`OpenRouter 요청에 실패했습니다. (${response.status}, ${modelId})${detail}`);
   }
   if (!response.body) throw new Error("OpenRouter 스트리밍 응답을 읽을 수 없습니다.");
 
@@ -413,7 +426,7 @@ async function generateOpenRouterCharacterTurn(apiKey: string, modelId: string, 
 
   if (!fullText.trim()) {
     const reason = openRouterFinishReasonMessage(finishReason);
-    throw new Error(reason ?? "OpenRouter 모델이 빈 응답을 반환했습니다.");
+    throw new Error(reason ?? `OpenRouter 모델이 빈 응답을 반환했습니다. (${modelId})`);
   }
 
   try {
