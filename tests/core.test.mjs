@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { demoCharacter } from "../dist/defaults.js";
+import { createInitialChat, defaultPersona, demoCharacter } from "../dist/defaults.js";
 import { createBackup } from "../dist/lib/backup.js";
-import { selectCacheFriendlyHistory } from "../dist/lib/context.js";
+import { buildContext, selectCacheFriendlyHistory } from "../dist/lib/context.js";
 import { appendStreamText, collectCandidateText, normalizeReplyText, parseSseEventBlock } from "../dist/lib/gemini.js";
 import { parseNarration } from "../dist/lib/narration.js";
 import { removeGeneratedMemories, restoreStateSnapshot } from "../dist/lib/regenerate.js";
@@ -29,6 +29,24 @@ test("narrative time advances deterministically", () => {
 test("Han Doa thought strips whitespace character-specifically", () => {
   assert.equal(normalizeInnerThought(demoCharacter, "나 진짜 왜 이래\n너무 좋아"), "나진짜왜이래너무좋아");
   assert.equal(normalizeInnerThought({ ...demoCharacter, stripInnerThoughtWhitespace: false }, "나 진짜 왜 이래"), "나 진짜 왜 이래");
+});
+
+test("Han Doa prompt uses the narrative corpus instead of forbidding psychological narration", () => {
+  const chat = createInitialChat(demoCharacter);
+  const prompt = buildContext({
+    character: demoCharacter,
+    persona: { ...defaultPersona, name: "원대", callMe: "원대" },
+    chat,
+    memories: [],
+    recentMessages: [],
+    userMessage: "진짜로?",
+    settings: { modelId: "gemini-3.5-flash-lite", responseLength: "normal", rememberApiKey: false },
+  });
+  assert.match(prompt, /HAN DOA AUTHORITATIVE STYLE CORPUS/);
+  assert.match(prompt, /같은 작품의 바로 다음 장면/);
+  assert.match(prompt, /불안형 인간 한도아에게는 묘한 구원/);
+  assert.doesNotMatch(prompt, /심리를 해설자처럼 설명하지 않는다/);
+  assert.match(prompt, /USER의 숨은 생각이나 감정을 임의로 확정하지 않는다/);
 });
 
 test("regenerate starts from stateBefore instead of stacking the previous delta", () => {
@@ -76,10 +94,14 @@ test("Gemini stream deltas are concatenated verbatim even when adjacent chunks r
   assert.equal(JSON.parse(reconstructed).reply, "ㅋㅋㅋㅋ");
 });
 
-test("reply normalization converts accidentally double-escaped newlines into real paragraphs", () => {
+test("reply normalization converts escaped and URI-encoded newlines into real paragraphs", () => {
   assert.equal(
     normalizeReplyText('*도아가 고개를 든다.*\\n\\n\"뭐야아?\"\\n\\n*입술을 삐죽인다.*'),
     '*도아가 고개를 든다.*\n\n\"뭐야아?\"\n\n*입술을 삐죽인다.*',
+  );
+  assert.equal(
+    normalizeReplyText('*도아가 움찔한다.*%0A%0A\"하아?!\"%0D%0A%0D%0A*눈치를 본다.*'),
+    '*도아가 움찔한다.*\n\n\"하아?!\"\n\n*눈치를 본다.*',
   );
   assert.equal(normalizeReplyText('첫 문단\n\n\n\n둘째 문단'), '첫 문단\n\n둘째 문단');
 });
