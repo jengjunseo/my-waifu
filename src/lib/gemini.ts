@@ -73,7 +73,7 @@ function dispatchReplyStream(reply: string, done = false) {
   window.dispatchEvent(new CustomEvent("chara:reply-stream", { detail: { reply, done } }));
 }
 
-/** Structured-output streaming chunks are deltas. Never deduplicate them. */
+/** Gemini structured-output streaming chunks are deltas. Never deduplicate them. */
 export function appendStreamText(current: string, chunk: string): string {
   return current + chunk;
 }
@@ -107,25 +107,6 @@ export function extractPartialReply(source: string): string {
   return output;
 }
 
-function parseModelResultText(text: string): ModelTurnResult {
-  const normalized = text.replace(/^\uFEFF/, "").trim();
-  const attempts = [normalized];
-  const unfenced = normalized.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  if (unfenced !== normalized) attempts.push(unfenced);
-  const firstBrace = normalized.indexOf("{");
-  const lastBrace = normalized.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) attempts.push(normalized.slice(firstBrace, lastBrace + 1));
-
-  for (const candidate of [...new Set(attempts)]) {
-    try {
-      return validateResult(JSON.parse(candidate));
-    } catch {
-      // Try the next conservative normalization. Never invent missing fields.
-    }
-  }
-  throw new SyntaxError("최종 응답이 유효한 Chara JSON이 아닙니다.");
-}
-
 export type StreamPart = {
   text?: string;
   thought?: boolean;
@@ -141,6 +122,11 @@ export type StreamEnvelope = {
   promptFeedback?: { blockReason?: string };
 };
 
+/**
+ * Parse one complete SSE event. Per the SSE data-field contract, multiple data
+ * lines are joined with a newline. A malformed complete event is an error: we
+ * must not silently drop a JSON delta and corrupt the final structured output.
+ */
 export function parseSseEventBlock(block: string): StreamEnvelope | null {
   const dataLines: string[] = [];
   for (const line of block.split(/\r?\n/)) {
@@ -161,6 +147,7 @@ export function parseSseEventBlock(block: string): StreamEnvelope | null {
   }
 }
 
+/** Ignore thought-summary parts and concatenate answer-text parts in order. */
 export function collectCandidateText(candidate: StreamCandidate): string {
   return candidate.content?.parts
     ?.filter((part) => part.thought !== true && typeof part.text === "string")
@@ -168,7 +155,7 @@ export function collectCandidateText(candidate: StreamCandidate): string {
     .join("") ?? "";
 }
 
-async function generateGeminiCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
+export async function generateCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
   if (!apiKey.trim()) throw new Error("Gemini API Key를 먼저 설정해 주세요.");
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
   const response = await fetch(endpoint, {
@@ -248,204 +235,15 @@ async function generateGeminiCharacterTurn(apiKey: string, modelId: string, prom
     throw new Error(reason ?? "Gemini가 빈 응답을 반환했습니다.");
   }
 
+  const finalText = fullText.replace(/^\uFEFF/, "").trim();
   try {
-    return parseModelResultText(fullText);
+    return validateResult(JSON.parse(finalText));
   } catch (error) {
     if (error instanceof SyntaxError) {
       const reason = finishReasonMessage(finishReason, blockReason);
-      const meta = `finishReason: ${finishReason || "없음"}, SSE events: ${eventCount}, chars: ${fullText.trim().length}`;
+      const meta = `finishReason: ${finishReason || "없음"}, SSE events: ${eventCount}, chars: ${finalText.length}`;
       throw new Error(reason ?? `Gemini 스트림의 최종 JSON을 해석하지 못했습니다. (${meta}) 재시도해 주세요.`);
     }
     throw error;
   }
-}
-
-type OpenRouterStreamEnvelope = {
-  choices?: Array<{
-    delta?: { content?: string | null };
-    finish_reason?: string | null;
-  }>;
-  error?: { message?: string; code?: string | number };
-};
-
-function parseOpenRouterSseEventBlock(block: string): OpenRouterStreamEnvelope | null {
-  const dataLines: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    let value = line.slice(5);
-    if (value.startsWith(" ")) value = value.slice(1);
-    dataLines.push(value);
-  }
-  if (!dataLines.length) return null;
-  const payload = dataLines.join("\n").trim();
-  if (!payload || payload === "[DONE]") return null;
-  try {
-    return JSON.parse(payload) as OpenRouterStreamEnvelope;
-  } catch {
-    throw new Error("OpenRouter 스트리밍 이벤트를 해석하지 못했습니다. 연결이 손상되었거나 예상하지 못한 SSE 응답을 받았습니다.");
-  }
-}
-
-function openRouterFinishReasonMessage(reason: string): string | null {
-  if (reason === "length") return "OpenRouter 모델 응답이 출력 한도에서 잘렸습니다. 재시도해 주세요.";
-  if (reason === "content_filter") return "OpenRouter 모델의 콘텐츠 필터로 응답이 중단되었습니다.";
-  if (reason && reason !== "stop") return `OpenRouter 모델 응답이 비정상적으로 종료되었습니다. (${reason})`;
-  return null;
-}
-
-const DEFAULT_OPENROUTER_FREE_MODEL = "google/gemma-4-26b-a4b-it:free";
-const retiredOpenRouterPresetModels = new Set([
-  "deepseek/deepseek-v4-flash:free",
-  "z-ai/glm-4.7-flash",
-  "minimax/minimax-m2-her",
-  "z-ai/glm-4.5-air:free",
-  "openrouter/free",
-]);
-
-function resolveOpenRouterModelId(modelId: string): string {
-  const normalized = modelId.trim();
-  return retiredOpenRouterPresetModels.has(normalized) ? DEFAULT_OPENROUTER_FREE_MODEL : normalized;
-}
-
-function isOpenRouterFreeModel(modelId: string): boolean {
-  return modelId.endsWith(":free");
-}
-
-const OPENROUTER_JSON_REMINDER = `\n\n# OPENROUTER JSON REMINDER\n반드시 설명, 코드펜스, 접두사 없이 JSON 객체 하나만 출력한다. 최상위 키는 reply, state, memoryCandidates 세 개다. state에는 innerThought, location, timeElapsedMinutes, affectionDelta, mood를 모두 포함한다. reply를 반드시 첫 번째 키로 출력한다.`;
-
-function buildOpenRouterBody(modelId: string, prompt: string, structured: boolean) {
-  const freeModel = isOpenRouterFreeModel(modelId);
-  const body: Record<string, unknown> = {
-    model: modelId,
-    messages: [{ role: "user", content: prompt + OPENROUTER_JSON_REMINDER }],
-    stream: true,
-    // Chara normally asks for ~400-500 response tokens plus a compact state
-    // envelope. Keeping free-route output bounded avoids needless long-running
-    // generations and reasoning spillover.
-    max_tokens: freeModel ? 1800 : 8192,
-  };
-
-  // Free routes intentionally avoid capability-heavy parameters. A :free model
-  // may be backed by a provider that does not expose strict JSON schema or a
-  // controllable reasoning mode even when another provider for the same model
-  // does. Prompt-only JSON plus Chara's conservative parser is more portable.
-  if (!freeModel && structured) {
-    body.response_format = {
-      type: "json_schema",
-      json_schema: {
-        name: "chara_turn",
-        strict: true,
-        schema: responseSchema,
-      },
-    };
-  }
-
-  return body;
-}
-
-async function openRouterFetch(apiKey: string, rawModelId: string, prompt: string): Promise<{ response: Response; modelId: string }> {
-  const modelId = resolveOpenRouterModelId(rawModelId);
-  const endpoint = "https://openrouter.ai/api/v1/chat/completions";
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${apiKey.trim()}`,
-  };
-  const freeModel = isOpenRouterFreeModel(modelId);
-  const wantsStructured = !freeModel && modelId !== "minimax/minimax-m2-her";
-
-  let response = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(buildOpenRouterBody(modelId, prompt, wantsStructured)),
-  });
-
-  if (!response.ok && wantsStructured && (response.status === 400 || response.status === 422)) {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(buildOpenRouterBody(modelId, prompt, false)),
-    });
-  }
-
-  return { response, modelId };
-}
-
-async function generateOpenRouterCharacterTurn(apiKey: string, rawModelId: string, prompt: string): Promise<ModelTurnResult> {
-  if (!apiKey.trim()) throw new Error("OpenRouter API Key를 먼저 설정해 주세요. (sk-or-v1-...) ");
-  const { response, modelId } = await openRouterFetch(apiKey, rawModelId, prompt);
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const json = await response.json();
-      detail = typeof json?.error?.message === "string" ? ` ${json.error.message}` : "";
-    } catch {
-      // avoid leaking raw response bodies
-    }
-    throw new Error(`OpenRouter 요청에 실패했습니다. (${response.status}, ${modelId})${detail}`);
-  }
-  if (!response.body) throw new Error("OpenRouter 스트리밍 응답을 읽을 수 없습니다.");
-
-  let fullText = "";
-  let lastPreview = "";
-  let finishReason = "";
-  let buffer = "";
-  let eventCount = 0;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  const consumeEvent = (block: string) => {
-    const envelope = parseOpenRouterSseEventBlock(block);
-    if (!envelope) return;
-    eventCount += 1;
-    if (envelope.error) throw new Error(`OpenRouter upstream 오류: ${envelope.error.message || envelope.error.code || "알 수 없는 오류"}`);
-
-    const choice = envelope.choices?.[0];
-    if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
-    const chunk = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-    fullText = appendStreamText(fullText, chunk);
-
-    const preview = extractPartialReply(fullText);
-    if (preview && preview !== lastPreview) {
-      lastPreview = preview;
-      dispatchReplyStream(preview);
-    }
-  };
-
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() ?? "";
-    for (const block of blocks) consumeEvent(block);
-    if (done) break;
-  }
-  if (buffer.trim()) consumeEvent(buffer);
-
-  const finalPreview = extractPartialReply(fullText);
-  if (finalPreview) dispatchReplyStream(finalPreview, true);
-
-  if (!fullText.trim()) {
-    const reason = openRouterFinishReasonMessage(finishReason);
-    throw new Error(reason ?? `OpenRouter 모델이 빈 응답을 반환했습니다. (${modelId})`);
-  }
-
-  try {
-    return parseModelResultText(fullText);
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      const reason = openRouterFinishReasonMessage(finishReason);
-      const meta = `model: ${modelId}, finishReason: ${finishReason || "없음"}, SSE events: ${eventCount}, chars: ${fullText.trim().length}`;
-      throw new Error(reason ?? `OpenRouter 스트림의 최종 JSON을 해석하지 못했습니다. (${meta}) 재시도해 주세요.`);
-    }
-    throw error;
-  }
-}
-
-function isDirectGeminiModel(modelId: string): boolean {
-  return modelId.trim().startsWith("gemini-");
-}
-
-export async function generateCharacterTurn(apiKey: string, modelId: string, prompt: string): Promise<ModelTurnResult> {
-  if (isDirectGeminiModel(modelId)) return generateGeminiCharacterTurn(apiKey, modelId, prompt);
-  return generateOpenRouterCharacterTurn(apiKey, modelId, prompt);
 }
