@@ -32,10 +32,25 @@ const responseSchema = {
   required: ["reply", "state", "memoryCandidates"],
 };
 
+function normalizeReplyLineBreaks(text: string): string {
+  return text
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+export function normalizeReplyText(text: string): string {
+  return normalizeReplyLineBreaks(text).trim();
+}
+
 function validateResult(value: unknown): ModelTurnResult {
   if (!value || typeof value !== "object") throw new Error("모델 응답이 올바른 JSON 객체가 아닙니다.");
   const v = value as Partial<ModelTurnResult>;
-  if (typeof v.reply !== "string" || !v.reply.trim()) throw new Error("캐릭터 응답이 비어 있습니다.");
+  if (typeof v.reply !== "string") throw new Error("캐릭터 응답이 비어 있습니다.");
+  const reply = normalizeReplyText(v.reply);
+  if (!reply) throw new Error("캐릭터 응답이 비어 있습니다.");
   if (!v.state || typeof v.state !== "object") throw new Error("상태 정보가 없습니다.");
   const state = v.state as ModelTurnResult["state"];
   if (typeof state.innerThought !== "string" || typeof state.location !== "string") throw new Error("상태 문자열이 올바르지 않습니다.");
@@ -43,7 +58,7 @@ function validateResult(value: unknown): ModelTurnResult {
   if (!Array.isArray(state.mood)) throw new Error("mood가 배열이 아닙니다.");
   const memoryCandidates = Array.isArray(v.memoryCandidates) ? v.memoryCandidates : [];
   return {
-    reply: v.reply,
+    reply,
     state: {
       innerThought: state.innerThought,
       location: state.location,
@@ -210,7 +225,7 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
     const chunk = candidate ? collectCandidateText(candidate) : "";
     fullText = appendStreamText(fullText, chunk);
 
-    const preview = extractPartialReply(fullText);
+    const preview = normalizeReplyLineBreaks(extractPartialReply(fullText));
     if (preview && preview !== lastPreview) {
       lastPreview = preview;
       dispatchReplyStream(preview);
@@ -227,7 +242,7 @@ export async function generateCharacterTurn(apiKey: string, modelId: string, pro
   }
   if (buffer.trim()) consumeEvent(buffer);
 
-  const finalPreview = extractPartialReply(fullText);
+  const finalPreview = normalizeReplyLineBreaks(extractPartialReply(fullText));
   if (finalPreview) dispatchReplyStream(finalPreview, true);
 
   if (!fullText) {
