@@ -35,3 +35,12 @@ Google Gemini REST `generateContent`를 사용하며 structured JSON response를
 ## v0.1에서 의도적으로 제외
 
 클라우드 동기화, 로그인, 결제, 음성, 이미지 생성, 그룹챗, vector DB/embedding retrieval, 소셜 기능.
+
+## World IF
+
+저장소에는 캐릭터 채팅과 별도의 World IF 엔진도 있습니다. `world.html`을 진입점으로 사용하며, 세계 설정과 제품 경계는 [World IF 제품 계약](docs/world-if/PRODUCT_CONTRACT.md)과 [설계 결정](docs/adr/ADR-world-if-engine.md)을 참고하세요. 두 엔진은 별도의 데이터베이스 경계를 사용합니다.
+
+## 남은 검증
+
+- [ ] 실제 Gemini 연결에서 각 엔진의 생성·오류 경로를 확인한다.
+- [ ] 기존 캐릭터 채팅 데이터와 World IF 세션의 백업·복구 및 호환성을 검증한다.
